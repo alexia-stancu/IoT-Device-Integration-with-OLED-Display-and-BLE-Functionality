@@ -1,0 +1,267 @@
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
+#include <BLE2902.h>
+#include <ArduinoJson.h>
+#include <WiFi.h>
+#include <HTTPClient.h>
+
+#include <SPI.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+Adafruit_SSD1306 display  (SCREEN_WIDTH, SCREEN_HEIGHT);
+
+String ssid = "AndroidAP";
+String password = "ParolaDeNedescifrat18;";
+const long connection_timeout = 15000;
+long startConnection = 0;
+
+void resetDisplay()
+{
+  display.begin(SSD1306_SWITCHCAPVCC, 0x3C, true);
+}
+void cd()
+{
+  display.clearDisplay();
+  display.display();
+}
+
+#define bleServerName "PiaProject"
+
+bool deviceConnected = false;
+
+std::string TEAM_ID;
+std::string text[6];
+
+#define SERVICE_UUID "91bad492-b950-4226-aa2b-4ede9fa42f59"
+#define CHARACTERISTIC_UUID "ca73b3ba-39f6-4ab3-91ae-186dc9577d99"
+
+BLECharacteristic characteristic(
+  CHARACTERISTIC_UUID,
+  BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_NOTIFY
+);
+BLEDescriptor *characteristicDescriptor = new BLEDescriptor(BLEUUID((uint16_t)0x2902));
+
+class MyServerCallbacks: public BLEServerCallbacks {
+    void onConnect(BLEServer* pServer) {
+      deviceConnected = true;
+      Serial.println("Device connected");
+    };
+    void onDisconnect(BLEServer* pServer) {
+      deviceConnected = false;
+      Serial.println("Device disconnected");
+    }
+};
+
+class CharacteristicsCallbacks: public BLECharacteristicCallbacks {
+    void onWrite(BLECharacteristic *characteristic) {
+      std::string data = characteristic->getValue();
+      Serial.println(data.c_str());
+      DynamicJsonDocument doc(512);
+      DeserializationError error = deserializeJson(doc, data);
+
+      if (error)
+      {
+        Serial.print("error");
+        Serial.println(error.c_str());
+      }
+      else
+      {
+        if (doc["action"] == "getLCDs")
+        {
+          TEAM_ID = doc["teamId"].as<std::string>();
+          StaticJsonDocument<512> raspuns;
+          raspuns["type"] = "OLED 1306";
+          raspuns["interface"] = "I2C";
+          raspuns["resolution"] = "128x64";
+          raspuns["id"] = 1;
+          raspuns["teamId"] = TEAM_ID;
+          String json;
+          serializeJson(raspuns, json);
+          characteristic->setValue(json.c_str());
+          characteristic->notify();
+        }
+        else if (doc["action"] == "setText")
+        {
+          StaticJsonDocument<512> raspuns;
+          raspuns["id"] = 1;
+          raspuns["text"] = doc["text"];
+          raspuns["teamId"] = TEAM_ID;
+          String json;
+          serializeJson(raspuns, json);
+          characteristic->setValue(json.c_str());
+          characteristic->notify();
+
+          resetDisplay();
+          cd();
+          display.setTextSize(1); // Normal 1:1 pixel scale
+          display.setTextColor(WHITE); // Draw white text
+          display.setCursor(0, 0); // Start at top-left corner
+          display.cp437(true); // Use full 256 char 'Code Page 437' font
+          JsonArray wordsArray = doc["text"].as<JsonArray>();
+          Serial.println(wordsArray.size());
+          for (int i = 0; i < wordsArray.size(); i++)
+          {
+            text[i] = wordsArray[i].as<std::string>();
+            String line = doc["text"][i];
+            display.setCursor(0, i * 9);
+            display.println(line);
+          }
+          display.display();
+        }
+        else if (doc["action"] == "scroll")
+        {
+          StaticJsonDocument<512> raspuns;
+          raspuns["id"] = 1;
+          raspuns["scrolling"] = doc["direction"];
+          raspuns["teamId"] = TEAM_ID;
+          String json;
+          serializeJson(raspuns, json);
+          characteristic->setValue(json.c_str());
+          characteristic->notify();
+
+          if (doc["direction"] == "Right")
+          {
+            display.startscrollright(0x00, 0x0F);
+          }
+          else
+          {
+            if (doc["direction"] == "Left")
+            {
+              display.startscrollleft(0x00, 0x0F);
+            }
+            else
+            {
+              display.stopscroll();
+            }
+          }
+
+        }
+        else if (doc["action"] == "setImage")
+        {
+          String url = doc["url"].as<String>();
+          Serial.println(url);
+          HTTPClient http;
+          http.begin(url);
+          http.setConnectTimeout(30000);
+          http.setTimeout(30000);
+          int httpResponseCode = http.GET();
+          if (httpResponseCode > 0)
+          {
+            Serial.print("HTTP Response code: ");
+            Serial.println(httpResponseCode);
+            String payload = http.getString();
+            Serial.println(payload);
+            DynamicJsonDocument imagine(25000);
+            DeserializationError error = deserializeJson(imagine, payload);
+            if (error)
+            {
+              Serial.print("error");
+              Serial.println(error.c_str());
+            }
+            else
+            {
+              resetDisplay();
+              cd();
+              //imagine["data"]
+              JsonArray pixeli = imagine["data"].as<JsonArray>();
+              Serial.println(pixeli.size());
+              for (int i = 0; i < pixeli.size(); i++) {
+                int x = pixeli[i]["x"].as<int>();
+                int y = pixeli[i]["y"].as<int>();
+                Serial.print("(");
+                Serial.print(x);
+                Serial.print(" ");
+                Serial.print(y);
+                Serial.print(")");
+                Serial.println();
+                display.drawPixel(x, y, SSD1306_WHITE);
+              }
+              display.display();
+              
+              StaticJsonDocument<512> raspuns;
+              raspuns["id"] = 1;
+              raspuns["number_pixels"] = pixeli.size();
+              raspuns["teamId"] = TEAM_ID;
+              String json;
+              serializeJson(raspuns, json);
+              characteristic->setValue(json.c_str());
+              characteristic->notify();
+            }
+          }
+          else
+          {
+            Serial.print("Error code: ");
+            Serial.println(httpResponseCode);
+          }
+        }
+      }
+
+
+    }
+};
+
+void setup() {
+  Serial.begin(115200);
+  //Setup display
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println(F("SSD1306 allocation failed"));
+    for (;;);
+  }
+  display.display();
+  display.clearDisplay();
+  delay(2500);
+  display.display();
+  
+  // Set text properties
+  display.setTextSize(1); // Normal 1:1 pixel scale
+  display.setTextColor(WHITE); // Draw white text
+  display.setCursor(0, 0); // Start at top-left corner
+  display.cp437(true); // Use full 256 char 'Code Page 437' font
+
+  //Setup BLE
+  BLEDevice::init(bleServerName);
+  BLEServer *pServer = BLEDevice::createServer();
+  pServer->setCallbacks(new MyServerCallbacks());
+  BLEService *bleService = pServer->createService(SERVICE_UUID);
+  bleService->addCharacteristic(&characteristic);
+  characteristic.addDescriptor(characteristicDescriptor);
+  characteristic.setCallbacks(new CharacteristicsCallbacks());
+  bleService->start();
+  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+  pAdvertising->addServiceUUID(SERVICE_UUID);
+  pServer->getAdvertising()->start();
+  Serial.println("Waiting a client connection to notify...");
+
+  //Setup WIFI
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
+  WiFi.begin(ssid.c_str(), password.c_str());
+  Serial.println("Connecting to WIFI");
+  startConnection = millis();
+  while (WiFi.status() != WL_CONNECTED)
+  {
+    Serial.print(".");
+    delay(500);
+    if (millis() - startConnection > connection_timeout)
+    {
+      break;
+    }
+  }
+  if (WiFi.status() != WL_CONNECTED)
+  {
+    Serial.println("Connection failed");
+  }
+  else
+  {
+    Serial.print("Connected to network: ");
+    Serial.println(WiFi.SSID());
+    Serial.print("Local IP address: ");
+    Serial.println(WiFi.localIP());
+  }
+}
+void loop(){}
