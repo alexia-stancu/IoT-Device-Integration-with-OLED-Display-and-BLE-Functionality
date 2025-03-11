@@ -1,2 +1,2 @@
 # IoT-Device-Integration-with-OLED-Display-and-BLE-Functionality
-IoT Display System with ESP32 | Arduino, Bluetooth Low Energy, Wi-Fi, JSON | Microcontroller Programming, Embedded Systems, Real-Time Data Processing, Low Power Optimization
+I designed and developed an IoT system using an ESP32 microcontroller to control an SSD1306 OLED display via BLE, enabling real-time text updates, image rendering, and scrolling functionalities. I integrated Wi-Fi to handle HTTP requests and process JSON-based data while optimizing system performance with Arduino libraries to ensure efficient resource management and low power consumption. Leveraging my expertise in microcontroller programming, data communication, and IoT system development, I created a reliable and responsive solution.
